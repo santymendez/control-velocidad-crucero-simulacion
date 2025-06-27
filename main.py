@@ -8,7 +8,7 @@ Kp, Ki       = 0.2, 0.05
 max_delta    = 0.5
 dt           = 0.1
 drag_coeff   = 0.01
-perturb_imp  = -10.0
+perturb_imp  = -5.0
 
 min_speed, max_speed      = 0, 200
 step_manual, step_cruise  = 1, 5
