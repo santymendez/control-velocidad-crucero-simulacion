@@ -8,8 +8,9 @@ Kp, Ki       = 0.2, 0.05
 max_delta    = 0.5
 dt           = 0.1
 drag_coeff   = 0.01
-perturb_imp  = -5.0
+perturb_imp  = 0.0
 
+# ─── Parámetros de Sliders ────────────────────────────────
 min_speed, max_speed      = 0, 200
 step_manual, step_cruise  = 1, 5
 slider_width              = 600
@@ -33,6 +34,8 @@ speed_data       = []
 p_data           = []
 i_data           = []
 input_speed_data = []
+error_band_data_pos = []
+error_band_data_neg = []
 
 # ─── UI State (inicializado en init_ui) ──────────────────
 screen = font = clock = None
@@ -76,10 +79,11 @@ def init_ui():
 
 # ─── Simulación (hilo) ────────────────────────────────────
 def run_simulation():
-    global actual_speed, integral, t, previous_throttle, perturb_requested
+    global actual_speed, integral, t, previous_throttle, perturb_requested, perturb_imp
     while running:
         if cruise_active:
             if perturb_requested:
+                perturb_imp = np.random.uniform(-10.0, -2.0)
                 actual_speed = max(0.0, actual_speed + perturb_imp)
                 perturb_requested = False
 
@@ -108,6 +112,8 @@ def run_simulation():
             i_data.append(i_term)
             speed_data.append(actual_speed)
             input_speed_data.append(desired_speed)
+            error_band_data_neg.append(-2.0)
+            error_band_data_pos.append(2.0)
         else:
             actual_speed = initial_speed
             t += dt
@@ -117,6 +123,8 @@ def run_simulation():
             i_data.append(0)
             speed_data.append(actual_speed)
             input_speed_data.append(initial_speed)
+            error_band_data_neg.append(-2.0)
+            error_band_data_pos.append(2.0)
 
         pygame.time.wait(int(dt * 1000))
 
@@ -160,6 +168,8 @@ def plot_to_surface():
     ax1.plot(time_data, error_data, color='red',    label='Error')
     ax1.plot(time_data, p_data,     color='purple', label='P (Proporcional)')
     ax1.plot(time_data, i_data,     color='brown',  label='I (Integral)')
+    ax1.plot(time_data, error_band_data_neg, color='gray',    label='Banda de Error', linestyle='--')
+    ax1.plot(time_data, error_band_data_pos, color='gray',    label='Banda de Error', linestyle='--')
     ax1.axhline(0, linestyle='-', color='gray', alpha=0.3)
     ax1.set_title("Controlador PI: Error vs P vs I", fontsize=11)
     ax1.set_xlabel("Tiempo (s)")
@@ -194,6 +204,7 @@ def clear_data():
     time_data.clear(); error_data.clear()
     speed_data.clear(); p_data.clear()
     i_data.clear(); input_speed_data.clear()
+    error_band_data_neg.clear(); error_band_data_pos.clear()
 
 # ─── Manejo de Eventos ────────────────────────────────────
 def handle_events():

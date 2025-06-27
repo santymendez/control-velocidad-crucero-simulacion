@@ -1,2 +1,29 @@
+# Entornos virtuales
 venv/
-.venv
+.venv/
+ENV/
+env/
+
+# Archivos de Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Configuración de IDEs
+.vscode/
+.idea/
+
+# Archivos de sistema
+.DS_Store
+Thumbs.db
+
+# Archivos de log o salida
+*.log
+*.out
+
+# Jupyter
+.ipynb_checkpoints
+
+# Archivos temporales
+*.tmp
+*.swp

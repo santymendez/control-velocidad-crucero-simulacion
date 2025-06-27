@@ -8,7 +8,7 @@ if defined _OLD_CODEPAGE (
     "%SystemRoot%\System32\chcp.com" 65001 > nul
 )
 
-set VIRTUAL_ENV=C:\Users\santi\Documents\utn\control-velocidad-crucero-simulacion\venv
+set VIRTUAL_ENV=C:\Users\matij\source\repos\control-velocidad-crucero-simulacion\venv
 
 if not defined PROMPT set PROMPT=$P$G
 
