@@ -1,216 +1,264 @@
 import pygame
 import matplotlib.pyplot as plt
+import matplotlib.backends.backend_tkagg as tkagg
+from matplotlib.figure import Figure
+import tkinter as tk
+from tkinter import ttk
 import threading
 import numpy as np
 
-# ─── Parámetros de Simulación ─────────────────────────────
-Kp, Ki       = 0.2, 0.05
-max_delta    = 0.5
-dt           = 0.1
-drag_coeff   = 0.01
-perturb_imp  = 0.0
+# Parámetros
+Kp, Ki = 0.2, 0.05
+max_delta, dt = 0.5, 0.1
+drag_coeff = 0.01
 
-# ─── Parámetros de Sliders ────────────────────────────────
-min_speed, max_speed      = 0, 200
-step_manual, step_cruise  = 1, 5
-slider_width              = 600
-num_steps_manual          = (max_speed - min_speed) // step_manual
-num_steps_cruise          = (max_speed - min_speed) // step_cruise
+min_speed, max_speed = 0, 200
+step_manual, step_cruise = 1, 5
+slider_width = 300
+num_steps_manual = (max_speed - min_speed) // step_manual
+num_steps_cruise = (max_speed - min_speed) // step_cruise
 
-# ─── Estado Global ────────────────────────────────────────
-actual_speed      = 60.0
-initial_speed     = actual_speed
-desired_speed     = 100.0
-integral          = 0.0
+# Estado global
+actual_speed = 60.0
+initial_speed = actual_speed
+desired_speed = 100.0
+integral = 0.0
 previous_throttle = actual_speed * drag_coeff
-t                 = 0.0
-running           = True
-cruise_active     = False
-perturb_requested = False
+t = 0.0
+running = True
+cruise_active = False
+perturb_flags = {2: False, 5: False, 10: False}
 
-time_data        = []
-error_data       = []
-speed_data       = []
-p_data           = []
-i_data           = []
-input_speed_data = []
-error_band_data_pos = []
-error_band_data_neg = []
+history = {
+    "time": [], "error": [], "speed": [], "p": [], "i": [],
+    "input_speed": [], "error_band_pos": [], "error_band_neg": [], "feedback": []
+}
 
-# ─── UI State (inicializado en init_ui) ──────────────────
+# UI Pygame
+plot_window = None
+plot_thread = None
+plot_running = False
 screen = font = clock = None
 manual_slider_rect = cruise_slider_rect = None
 manual_knob_rect = cruise_knob_rect = None
-button_rect = perturb_button_rect = None
+button_rect = None
+perturb_buttons_rects = {}
 step_size_manual = step_size_cruise = None
+dragging_manual = dragging_cruise = False
 
-# ─── Inicialización de UI ─────────────────────────────────
+use_p = True
+use_i = True
+p_button_rect = None
+i_button_rect = None
+
 def init_ui():
     global screen, font, clock
     global manual_slider_rect, cruise_slider_rect
-    global manual_knob_rect, cruise_knob_rect
-    global button_rect, perturb_button_rect
-    global step_size_manual, step_size_cruise
+    global manual_knob_rect, cruise_knob_rect, button_rect
+    global step_size_manual, step_size_cruise, perturb_buttons_rects
+    global p_button_rect, i_button_rect
 
     pygame.init()
-    WIDTH, HEIGHT = 900, 800
+    WIDTH, HEIGHT = 520, 310
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
     pygame.display.set_caption("Control de Crucero")
-    font = pygame.font.SysFont("consolas", 20)
+    font = pygame.font.SysFont("consolas", 16)
     clock = pygame.time.Clock()
 
     step_size_manual = slider_width / num_steps_manual
     step_size_cruise = slider_width / num_steps_cruise
 
-    manual_slider_rect = pygame.Rect(150, 50, slider_width, 10)
-    cruise_slider_rect = pygame.Rect(150, 110, slider_width, 10)
+    slider_start_x = 30
+    manual_slider_rect = pygame.Rect(slider_start_x, 35, slider_width, 10)
+    cruise_slider_rect = pygame.Rect(slider_start_x, 75, slider_width, 10)
 
     mx = manual_slider_rect.left + (initial_speed - min_speed) / (max_speed - min_speed) * slider_width
     cx = cruise_slider_rect.left + (desired_speed - min_speed) / (max_speed - min_speed) * slider_width
-    manual_knob_rect = pygame.Rect(mx - 10, manual_slider_rect.y - 6, 20, 20)
-    cruise_knob_rect = pygame.Rect(cx - 10, cruise_slider_rect.y - 6, 20, 20)
+    manual_knob_rect = pygame.Rect(mx - 8, manual_slider_rect.y - 5, 16, 16)
+    cruise_knob_rect = pygame.Rect(cx - 8, cruise_slider_rect.y - 5, 16, 16)
 
-    bw, pw, bh, gap = 100, 140, 30, 20
-    y = 140
-    total = bw + gap + pw
-    start_x = (WIDTH - total) // 2
-    button_rect = pygame.Rect(start_x, y, bw, bh)
-    perturb_button_rect = pygame.Rect(start_x + bw + gap, y, pw, bh)
+    p_button_rect = pygame.Rect(30, 115, 80, 30)
+    i_button_rect = pygame.Rect(120, 115, 80, 30)
+    button_rect = pygame.Rect(220, 115, 80, 30)
 
-# ─── Simulación (hilo) ────────────────────────────────────
+    pb_width, pb_gap = 70, 10
+    total_pb_width = 3 * pb_width + 2 * pb_gap
+    start_pb_x = (WIDTH - total_pb_width) // 2
+    pb_y = 165
+    for idx, kmh in enumerate((2, 5, 10)):
+        x = start_pb_x + idx * (pb_width + pb_gap)
+        perturb_buttons_rects[kmh] = pygame.Rect(x, pb_y, pb_width, 30)
+
 def run_simulation():
-    global actual_speed, integral, t, previous_throttle, perturb_requested, perturb_imp
+    global actual_speed, integral, t, previous_throttle
     while running:
         if cruise_active:
-            if perturb_requested:
-                perturb_imp = np.random.uniform(-10.0, -2.0)
-                actual_speed = max(0.0, actual_speed + perturb_imp)
-                perturb_requested = False
+            for k in perturb_flags:
+                if perturb_flags[k]:
+                    actual_speed = max(0.0, actual_speed - k)
+                    perturb_flags[k] = False
 
             error = desired_speed - actual_speed
-            integral += error * dt
-            p_term = Kp * error
-            i_term = Ki * integral
+            integral += error * dt if use_i else 0
+            p_term = Kp * error if use_p else 0
+            i_term = Ki * integral if use_i else 0
             raw = p_term + i_term
 
             delta = raw - previous_throttle
-            if delta > max_delta:
-                throttle = previous_throttle + max_delta
-            elif delta < -max_delta:
-                throttle = previous_throttle - max_delta
-            else:
-                throttle = raw
+            throttle = previous_throttle + np.clip(delta, -max_delta, max_delta)
             previous_throttle = throttle
 
             accel = throttle - drag_coeff * actual_speed
             actual_speed += accel * dt
 
-            t += dt
-            time_data.append(t)
-            error_data.append(error)
-            p_data.append(p_term)
-            i_data.append(i_term)
-            speed_data.append(actual_speed)
-            input_speed_data.append(desired_speed)
-            error_band_data_neg.append(-2.0)
-            error_band_data_pos.append(2.0)
         else:
             actual_speed = initial_speed
-            t += dt
-            time_data.append(t)
-            error_data.append(0)
-            p_data.append(0)
-            i_data.append(0)
-            speed_data.append(actual_speed)
-            input_speed_data.append(initial_speed)
-            error_band_data_neg.append(-2.0)
-            error_band_data_pos.append(2.0)
+            p_term = i_term = 0
+
+        t += dt
+        history["time"].append(t)
+        history["error"].append(desired_speed - actual_speed if cruise_active else 0)
+        history["p"].append(p_term)
+        history["i"].append(i_term)
+        history["speed"].append(actual_speed)
+        history["input_speed"].append(desired_speed if cruise_active else initial_speed)
+        history["feedback"].append(actual_speed)
+        history["error_band_pos"].append(2.0)
+        history["error_band_neg"].append(-2.0)
 
         pygame.time.wait(int(dt * 1000))
 
-# ─── Dibujado de Sliders ───────────────────────────────────
 def draw_sliders():
-    # Títulos de sliders
-    screen.blit(font.render("Velocidad inicial:", True, (0,0,0)),
-                (manual_slider_rect.x, manual_slider_rect.y - 25))
-    screen.blit(font.render("Velocidad crucero:", True, (0,0,0)),
-                (cruise_slider_rect.x, cruise_slider_rect.y - 25))
+    screen.blit(font.render("Inicial:", True, (0, 0, 0)),
+                (manual_slider_rect.x, manual_slider_rect.y - 18))
+    screen.blit(font.render("Crucero:", True, (0, 0, 0)),
+                (cruise_slider_rect.x, cruise_slider_rect.y - 18))
 
-    # Slider manual
     pygame.draw.rect(screen, (220,220,220), manual_slider_rect)
     pygame.draw.rect(screen, (100,100,255), manual_knob_rect)
-    screen.blit(font.render(f"{initial_speed:.1f} km/h", True, (0,0,0)),
-                (manual_slider_rect.right + 10, manual_slider_rect.y - 5))
+    screen.blit(font.render(f"{initial_speed:.0f} km/h", True, (0,0,0)),
+                (manual_slider_rect.right + 10, manual_slider_rect.y - 3))
 
-    # Slider crucero
     pygame.draw.rect(screen, (220,220,220), cruise_slider_rect)
     pygame.draw.rect(screen, (0,200,0), cruise_knob_rect)
-    screen.blit(font.render(f"{desired_speed:.1f} km/h", True, (0,0,0)),
-                (cruise_slider_rect.right + 10, cruise_slider_rect.y - 5))
-# ─── Dibujado de Botones ───────────────────────────────────
+    screen.blit(font.render(f"{desired_speed:.0f} km/h", True, (0,0,0)),
+                (cruise_slider_rect.right + 10, cruise_slider_rect.y - 3))
+
 def draw_buttons():
-    # Botón Start/Stop
+    # Controlador P
+    color = (0, 200, 0) if use_p else (150, 150, 150)
+    pygame.draw.rect(screen, color, p_button_rect)
+    label = font.render("Control P", True, (255, 255, 255))
+    screen.blit(label, label.get_rect(center=p_button_rect.center))
+
+    # Controlador I
+    color = (0, 200, 0) if use_i else (150, 150, 150)
+    pygame.draw.rect(screen, color, i_button_rect)
+    label = font.render("Control I", True, (255, 255, 255))
+    screen.blit(label, label.get_rect(center=i_button_rect.center))
+
+    # Start/Stop
     color = (0,150,0) if not cruise_active else (200,0,0)
     pygame.draw.rect(screen, color, button_rect)
-    surf = font.render("Start" if not cruise_active else "Stop", True, (255,255,255))
-    screen.blit(surf, surf.get_rect(center=button_rect.center))
+    text = font.render("Start" if not cruise_active else "Stop", True, (255,255,255))
+    screen.blit(text, text.get_rect(center=button_rect.center))
 
-    # Botón Perturbar
-    pygame.draw.rect(screen, (150,75,0), perturb_button_rect)
-    ps = font.render("Perturbar", True, (255,255,255))
-    screen.blit(ps, ps.get_rect(center=perturb_button_rect.center))
+    # Botones de perturbación
+    for kmh, rect in perturb_buttons_rects.items():
+        if cruise_active:
+            color = {2: (180,60,60), 5: (150,75,0), 10: (120,0,0)}[kmh]
+            text_color = (255,255,255)
+        else:
+            color = (180,180,180)
+            text_color = (100,100,100)
+        pygame.draw.rect(screen, color, rect)
+        txt = font.render(f"-{kmh}", True, text_color)
+        screen.blit(txt, txt.get_rect(center=rect.center))
 
-# ─── Gráfica ────────────────────────────────────────────── ──────────────────────────────────────────────
-def plot_to_surface():
-    fig, (ax1, ax2) = plt.subplots(2,1,figsize=(8,6), dpi=100)
+def draw_status():
+    screen.blit(font.render(f"Actual: {actual_speed:.1f} km/h", True, (0,100,200)), (30, 215))
+    status = "Crucero: " + ("ACTIVO" if cruise_active else "INACTIVO")
+    color = (0,150,0) if cruise_active else (200,0,0)
+    screen.blit(font.render(status, True, color), (30, 240))
 
-    # Gráfico 1: Error, P e I
-    ax1.plot(time_data, error_data, color='red',    label='Error')
-    ax1.plot(time_data, p_data,     color='purple', label='P (Proporcional)')
-    ax1.plot(time_data, i_data,     color='brown',  label='I (Integral)')
-    ax1.plot(time_data, error_band_data_neg, color='gray',    label='Banda de Error', linestyle='--')
-    ax1.plot(time_data, error_band_data_pos, color='gray',    label='Banda de Error', linestyle='--')
-    ax1.axhline(0, linestyle='-', color='gray', alpha=0.3)
-    ax1.set_title("Controlador PI: Error vs P vs I", fontsize=11)
-    ax1.set_xlabel("Tiempo (s)")
-    ax1.set_ylabel("Valor")
-    ax1.legend(loc='upper right')
-    if time_data:
-        ax1.set_xlim(time_data[0], time_data[-1])
+def create_plot_window():
+    global plot_window, plot_running
 
-    # Gráfico 2: velocidades
-    ax2.plot(time_data, speed_data,       color='green',  label='Velocidad Actual')
-    ax2.plot(time_data, input_speed_data, color='orange', linestyle='--', label='Velocidad Ingresada')
-    ax2.set_title("Sistema: Velocidad Actual vs Ingresada", fontsize=11)
-    ax2.set_xlabel("Tiempo (s)")
-    ax2.set_ylabel("Velocidad (km/h)")
-    ax2.legend(loc='upper right')
-    if time_data:
-        ax2.set_xlim(time_data[0], time_data[-1])
+    plot_window = tk.Tk()
+    plot_window.title("Gráficos - Control PI")
+    plot_window.geometry("1200x900")
+    plot_window.protocol("WM_DELETE_WINDOW", close_plot_window)
 
-    fig.tight_layout()
-    fig.canvas.draw()
-    w,h = fig.canvas.get_width_height()
-    img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8).reshape(h, w, 3)
-    plt.close(fig)
-    return pygame.image.frombuffer(img.flatten(), (w,h), 'RGB')
+    fig = Figure(figsize=(12, 10), dpi=100)
+    axs = [fig.add_subplot(3, 2, i+1) for i in range(4)] + [fig.add_subplot(3, 2, (5, 6))]
+    canvas = tkagg.FigureCanvasTkAgg(fig, plot_window)
+    canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
-# ─── Reset de Datos ───────────────────────────────────────
+    btn = ttk.Button(plot_window, text="Cerrar Gráficos", command=close_plot_window)
+    btn.pack(pady=10)
+    plot_running = True
+
+    def update_plots():
+        if not plot_running or not history["time"]:
+            plot_window.after(100, update_plots)
+            return
+
+        for ax in axs:
+            ax.clear()
+
+        axs[0].plot(history["time"], history["input_speed"], 'b--', label='Referencia')
+        axs[0].plot(history["time"], history["speed"], 'g-', label='Velocidad')
+        axs[0].set_title("Entrada vs Velocidad Actual")
+        axs[0].legend(); axs[0].grid(True)
+
+        axs[1].plot(history["time"], history["error"], 'r-', label='Error')
+        axs[1].plot(history["time"], history["error_band_pos"], 'gray', linestyle='--', label='Banda ±2')
+        axs[1].plot(history["time"], history["error_band_neg"], 'gray', linestyle='--')
+        axs[1].set_title("Error"); axs[1].legend(); axs[1].grid(True)
+
+        axs[2].plot(history["time"], history["p"], 'purple', label='P')
+        axs[2].set_title("Controlador P"); axs[2].legend(); axs[2].grid(True)
+
+        axs[3].plot(history["time"], history["i"], 'brown', label='I')
+        axs[3].set_title("Controlador I"); axs[3].legend(); axs[3].grid(True)
+
+        axs[4].plot(history["time"], history["feedback"], 'orange', label='Feedback')
+        axs[4].set_title("Realimentación")
+        axs[4].legend()
+        axs[4].grid(True)
+
+        fig.tight_layout()
+        canvas.draw()
+        plot_window.after(100, update_plots)
+
+    update_plots()
+    plot_window.mainloop()
+
+def close_plot_window():
+    global plot_running, plot_window
+    plot_running = False
+    if plot_window:
+        plot_window.destroy()
+        plot_window = None
+
+def start_plot_window():
+    global plot_thread
+    if not plot_window:
+        plot_thread = threading.Thread(target=create_plot_window, daemon=True)
+        plot_thread.start()
+
 def clear_data():
     global integral, previous_throttle, t
     integral = 0.0
     previous_throttle = actual_speed * drag_coeff
     t = 0.0
-    time_data.clear(); error_data.clear()
-    speed_data.clear(); p_data.clear()
-    i_data.clear(); input_speed_data.clear()
-    error_band_data_neg.clear(); error_band_data_pos.clear()
+    for k in history:
+        history[k].clear()
 
-# ─── Manejo de Eventos ────────────────────────────────────
 def handle_events():
-    global running, cruise_active, perturb_requested
-    global initial_speed, desired_speed
-    global dragging_manual, dragging_cruise
+    global running, cruise_active
+    global dragging_manual, dragging_cruise, initial_speed, desired_speed
+    global use_p, use_i
 
     for e in pygame.event.get():
         if e.type == pygame.QUIT:
@@ -220,11 +268,21 @@ def handle_events():
                 dragging_manual = True
             elif cruise_knob_rect.collidepoint(e.pos):
                 dragging_cruise = True
+            elif p_button_rect.collidepoint(e.pos):
+                use_p = not use_p
+            elif i_button_rect.collidepoint(e.pos):
+                use_i = not use_i
             elif button_rect.collidepoint(e.pos):
                 cruise_active = not cruise_active
-                if cruise_active: clear_data()
-            elif perturb_button_rect.collidepoint(e.pos) and cruise_active:
-                perturb_requested = True
+                if cruise_active:
+                    clear_data()
+                    start_plot_window()
+                else:
+                    close_plot_window()
+            elif cruise_active:
+                for kmh, rect in perturb_buttons_rects.items():
+                    if rect.collidepoint(e.pos):
+                        perturb_flags[kmh] = True
         elif e.type == pygame.MOUSEBUTTONUP:
             dragging_manual = dragging_cruise = False
         elif e.type == pygame.MOUSEMOTION:
@@ -239,30 +297,20 @@ def handle_events():
                 desired_speed = min_speed + rel * step_cruise
                 cruise_knob_rect.x = cruise_slider_rect.left + rel * step_size_cruise - 10
 
-# ─── Bucle Principal ─────────────────────────────────────
 def main():
-    global dragging_manual, dragging_cruise
     init_ui()
     threading.Thread(target=run_simulation, daemon=True).start()
-    dragging_manual = dragging_cruise = False
 
     while running:
         handle_events()
         screen.fill((255,255,255))
         draw_sliders()
         draw_buttons()
-        screen.blit(font.render(f"Actual: {actual_speed:.1f} km/h", True, (0,100,200)), (150,180))
-        # Estado del control de crucero debajo de la velocidad actual
-        status = "Crucero: " + ("ACTIVO" if cruise_active else "INACTIVO")
-        color = (0,150,0) if cruise_active else (200,0,0)
-        screen.blit(font.render(status, True, color), (150,205))
-        if cruise_active and len(time_data) > 1:
-            surf = plot_to_surface()
-            surf = pygame.transform.smoothscale(surf, (700,530))
-            screen.blit(surf, (100,240))
+        draw_status()
         pygame.display.flip()
         clock.tick(30)
 
+    close_plot_window()
     pygame.quit()
 
 if __name__ == "__main__":
