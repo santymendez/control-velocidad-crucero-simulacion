@@ -1,3 +1,4 @@
+import time
 import pygame
 import matplotlib.pyplot as plt
 import matplotlib.backends.backend_tkagg as tkagg
@@ -5,11 +6,10 @@ from matplotlib.figure import Figure
 import tkinter as tk
 from tkinter import ttk
 import threading
-import numpy as np
 
 # Parámetros
-Kp, Ki = 0.2, 0.05
-max_delta, dt = 0.5, 0.1
+Kp, Ki = 0.5, 0.05
+max_delta, dt = 0.5, 0.01
 drag_coeff = 0.01
 
 min_speed, max_speed = 0, 200
@@ -19,7 +19,7 @@ num_steps_manual = (max_speed - min_speed) // step_manual
 num_steps_cruise = (max_speed - min_speed) // step_cruise
 
 # Estado global
-actual_speed = 60.0
+actual_speed = 95.0
 initial_speed = actual_speed
 desired_speed = 100.0
 integral = 0.0
@@ -27,11 +27,11 @@ previous_throttle = actual_speed * drag_coeff
 t = 0.0
 running = True
 cruise_active = False
-perturb_flags = {2: False, 5: False, 10: False}
+perturb_flags = {2: False, 5: False, 20: False}
 
 history = {
     "time": [], "error": [], "speed": [], "p": [], "i": [],
-    "input_speed": [], "error_band_pos": [], "error_band_neg": [], "feedback": []
+    "input_speed": [], "error_band_pos": [], "error_band_neg": [], "feedback": [], "perturbations": []
 }
 
 # UI Pygame
@@ -93,9 +93,11 @@ def run_simulation():
     global actual_speed, integral, t, previous_throttle
     while running:
         if cruise_active:
+            perturb_amount = 0
             for k in perturb_flags:
                 if perturb_flags[k]:
                     actual_speed = max(0.0, actual_speed - k)
+                    perturb_amount += k
                     perturb_flags[k] = False
 
             error = desired_speed - actual_speed
@@ -105,7 +107,12 @@ def run_simulation():
             raw = p_term + i_term
 
             delta = raw - previous_throttle
-            throttle = previous_throttle + np.clip(delta, -max_delta, max_delta)
+            if delta > max_delta:
+                throttle = previous_throttle + max_delta
+            elif delta < -max_delta:
+                throttle = previous_throttle - max_delta
+            else:
+                throttle = raw
             previous_throttle = throttle
 
             accel = throttle - drag_coeff * actual_speed
@@ -114,6 +121,7 @@ def run_simulation():
         else:
             actual_speed = initial_speed
             p_term = i_term = 0
+            perturb_amount = 0
 
         t += dt
         history["time"].append(t)
@@ -125,8 +133,9 @@ def run_simulation():
         history["feedback"].append(actual_speed)
         history["error_band_pos"].append(2.0)
         history["error_band_neg"].append(-2.0)
+        history["perturbations"].append(perturb_amount)
 
-        pygame.time.wait(int(dt * 1000))
+        time.sleep(dt)
 
 def draw_sliders():
     screen.blit(font.render("Inicial:", True, (0, 0, 0)),
@@ -184,13 +193,21 @@ def draw_status():
 def create_plot_window():
     global plot_window, plot_running
 
+    plot_running = False
+    if plot_window:
+        try:
+            plot_window.after(0, plot_window.destroy)
+        except:
+            pass
+        plot_window = None
+
     plot_window = tk.Tk()
     plot_window.title("Gráficos - Control PI")
-    plot_window.geometry("1200x900")
+    plot_window.geometry("1400x1000")
     plot_window.protocol("WM_DELETE_WINDOW", close_plot_window)
 
-    fig = Figure(figsize=(12, 10), dpi=100)
-    axs = [fig.add_subplot(3, 2, i+1) for i in range(4)] + [fig.add_subplot(3, 2, (5, 6))]
+    fig = Figure(figsize=(14, 10), dpi=100)
+    axs = [fig.add_subplot(4, 2, i+1) for i in range(7)]
     canvas = tkagg.FigureCanvasTkAgg(fig, plot_window)
     canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
@@ -206,26 +223,43 @@ def create_plot_window():
         for ax in axs:
             ax.clear()
 
-        axs[0].plot(history["time"], history["input_speed"], 'b--', label='Referencia')
-        axs[0].plot(history["time"], history["speed"], 'g-', label='Velocidad')
-        axs[0].set_title("Entrada vs Velocidad Actual")
+        # 1. Entrada
+        axs[0].plot(history["time"], history["input_speed"], 'b-', label='Entrada')
+        axs[0].set_title("Entrada deseada")
         axs[0].legend(); axs[0].grid(True)
 
-        axs[1].plot(history["time"], history["error"], 'r-', label='Error')
-        axs[1].plot(history["time"], history["error_band_pos"], 'gray', linestyle='--', label='Banda ±2')
-        axs[1].plot(history["time"], history["error_band_neg"], 'gray', linestyle='--')
-        axs[1].set_title("Error"); axs[1].legend(); axs[1].grid(True)
+        # 2. Realimentación
+        axs[1].plot(history["time"], history["feedback"], 'g-', label='Realimentación')
+        axs[1].set_title("Velocidad Realimentada")
+        axs[1].legend(); axs[1].grid(True)
 
-        axs[2].plot(history["time"], history["p"], 'purple', label='P')
-        axs[2].set_title("Controlador P"); axs[2].legend(); axs[2].grid(True)
+        # 3. Error
+        axs[2].plot(history["time"], history["error"], 'r-', label='Error')
+        axs[2].plot(history["time"], history["error_band_pos"], 'gray', linestyle='--', label='Banda ±2')
+        axs[2].plot(history["time"], history["error_band_neg"], 'gray', linestyle='--')
+        axs[2].set_title("Error")
+        axs[2].legend(); axs[2].grid(True)
 
-        axs[3].plot(history["time"], history["i"], 'brown', label='I')
-        axs[3].set_title("Controlador I"); axs[3].legend(); axs[3].grid(True)
+        # 4. Control P + I
+        pi_sum = [p + i for p, i in zip(history["p"], history["i"])]
+        axs[3].plot(history["time"], pi_sum, 'black', label='P + I')
+        axs[3].set_title("Controlador Total (P + I)")
+        axs[3].legend(); axs[3].grid(True)
 
-        axs[4].plot(history["time"], history["feedback"], 'orange', label='Feedback')
-        axs[4].set_title("Realimentación")
-        axs[4].legend()
-        axs[4].grid(True)
+        # 5. Control P
+        axs[4].plot(history["time"], history["p"], 'purple', label='P')
+        axs[4].set_title("Controlador P")
+        axs[4].legend(); axs[4].grid(True)
+
+        # 6. Control I
+        axs[5].plot(history["time"], history["i"], 'brown', label='I')
+        axs[5].set_title("Controlador I")
+        axs[5].legend(); axs[5].grid(True)
+
+        # 7. Perturbaciones
+        axs[6].step(history["time"], history["perturbations"], where='post', color='orange', label='Perturbación (km/h)')
+        axs[6].set_title("Perturbaciones Aplicadas")
+        axs[6].legend(); axs[6].grid(True)
 
         fig.tight_layout()
         canvas.draw()
@@ -238,7 +272,10 @@ def close_plot_window():
     global plot_running, plot_window
     plot_running = False
     if plot_window:
-        plot_window.destroy()
+        try:
+            plot_window.after(0, plot_window.destroy)
+        except:
+            pass
         plot_window = None
 
 def start_plot_window():
@@ -308,7 +345,7 @@ def main():
         draw_buttons()
         draw_status()
         pygame.display.flip()
-        clock.tick(30)
+        clock.tick(60)
 
     close_plot_window()
     pygame.quit()
