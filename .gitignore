@@ -1,29 +1,36 @@
-# Entornos virtuales
-venv/
-.venv/
-ENV/
-env/
-
-# Archivos de Python
+# Archivos y carpetas de Python
 __pycache__/
 *.py[cod]
-*$py.class
+*.pyo
+*.pyd
+*.pyc
 
-# Configuración de IDEs
-.vscode/
-.idea/
+# Archivos del entorno virtual
+.venv/
+venv/
+.env/
 
-# Archivos de sistema
+# Archivos generados por PyInstaller
+build/
+dist/
+*.spec
+*.exe
+
+# Archivos de log
+*.log
+
+# Archivos temporales del sistema
 .DS_Store
 Thumbs.db
 
-# Archivos de log o salida
-*.log
-*.out
+# Archivos de configuración de editores
+.vscode/
+.idea/
 
-# Jupyter
-.ipynb_checkpoints
-
-# Archivos temporales
+# Archivos de pruebas temporales
+*.bak
 *.tmp
-*.swp
+
+# Carpetas comunes para ejecutables o recursos externos
+ejecutable/
+output/

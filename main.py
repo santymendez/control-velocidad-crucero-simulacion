@@ -1,13 +1,11 @@
 import time
 import pygame
-import matplotlib.pyplot as plt
 import matplotlib.backends.backend_tkagg as tkagg
 from matplotlib.figure import Figure
 import tkinter as tk
 from tkinter import ttk
 import threading
 
-# Parámetros
 Kp, Ki = 0.25, 0.05
 max_delta, dt = 0.5, 0.01
 drag_coeff = 0.01
@@ -18,7 +16,6 @@ slider_width = 300
 num_steps_manual = (max_speed - min_speed) // step_manual
 num_steps_cruise = (max_speed - min_speed) // step_cruise
 
-# Estado global
 actual_speed = 95.0
 initial_speed = actual_speed
 desired_speed = 100.0
@@ -35,7 +32,6 @@ history = {
     "input_speed": [], "error_band_pos": [], "error_band_neg": [], "feedback": [], "perturbations": []
 }
 
-# UI Pygame
 plot_window = None
 plot_thread = None
 plot_running = False
