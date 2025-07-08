@@ -8,7 +8,7 @@ from tkinter import ttk
 import threading
 
 # Parámetros
-Kp, Ki = 0.5, 0.05
+Kp, Ki = 0.25, 0.05
 max_delta, dt = 0.5, 0.01
 drag_coeff = 0.01
 
@@ -27,6 +27,7 @@ previous_throttle = actual_speed * drag_coeff
 t = 0.0
 running = True
 cruise_active = False
+paused = False
 perturb_flags = {2: False, 5: False, 20: False}
 
 history = {
@@ -41,7 +42,7 @@ plot_running = False
 screen = font = clock = None
 manual_slider_rect = cruise_slider_rect = None
 manual_knob_rect = cruise_knob_rect = None
-button_rect = None
+button_rect = pause_button_rect = None
 perturb_buttons_rects = {}
 step_size_manual = step_size_cruise = None
 dragging_manual = dragging_cruise = False
@@ -54,12 +55,12 @@ i_button_rect = None
 def init_ui():
     global screen, font, clock
     global manual_slider_rect, cruise_slider_rect
-    global manual_knob_rect, cruise_knob_rect, button_rect
+    global manual_knob_rect, cruise_knob_rect, button_rect, pause_button_rect
     global step_size_manual, step_size_cruise, perturb_buttons_rects
     global p_button_rect, i_button_rect
 
     pygame.init()
-    WIDTH, HEIGHT = 520, 310
+    WIDTH, HEIGHT = 520, 350
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
     pygame.display.set_caption("Control de Crucero")
     font = pygame.font.SysFont("consolas", 16)
@@ -80,6 +81,7 @@ def init_ui():
     p_button_rect = pygame.Rect(30, 115, 80, 30)
     i_button_rect = pygame.Rect(120, 115, 80, 30)
     button_rect = pygame.Rect(220, 115, 80, 30)
+    pause_button_rect = pygame.Rect(310, 115, 80, 30)
 
     pb_width, pb_gap = 70, 10
     total_pb_width = 3 * pb_width + 2 * pb_gap
@@ -92,6 +94,10 @@ def init_ui():
 def run_simulation():
     global actual_speed, integral, t, previous_throttle
     while running:
+        if paused:
+            time.sleep(dt)
+            continue
+
         if cruise_active:
             perturb_amount = 0
             for k in perturb_flags:
@@ -154,25 +160,26 @@ def draw_sliders():
                 (cruise_slider_rect.right + 10, cruise_slider_rect.y - 3))
 
 def draw_buttons():
-    # Controlador P
     color = (0, 200, 0) if use_p else (150, 150, 150)
     pygame.draw.rect(screen, color, p_button_rect)
     label = font.render("Control P", True, (255, 255, 255))
     screen.blit(label, label.get_rect(center=p_button_rect.center))
 
-    # Controlador I
     color = (0, 200, 0) if use_i else (150, 150, 150)
     pygame.draw.rect(screen, color, i_button_rect)
     label = font.render("Control I", True, (255, 255, 255))
     screen.blit(label, label.get_rect(center=i_button_rect.center))
 
-    # Start/Stop
     color = (0,150,0) if not cruise_active else (200,0,0)
     pygame.draw.rect(screen, color, button_rect)
     text = font.render("Start" if not cruise_active else "Stop", True, (255,255,255))
     screen.blit(text, text.get_rect(center=button_rect.center))
 
-    # Botones de perturbación
+    color = (255,165,0) if not paused else (0,100,255)
+    pygame.draw.rect(screen, color, pause_button_rect)
+    text = font.render("Pausa" if not paused else "Reanudar", True, (255,255,255))
+    screen.blit(text, text.get_rect(center=pause_button_rect.center))
+
     for kmh, rect in perturb_buttons_rects.items():
         if cruise_active:
             color = {2: (180,60,60), 5: (150,75,0), 10: (120,0,0)}[kmh]
@@ -207,7 +214,17 @@ def create_plot_window():
     plot_window.protocol("WM_DELETE_WINDOW", close_plot_window)
 
     fig = Figure(figsize=(14, 10), dpi=100)
-    axs = [fig.add_subplot(4, 2, i+1) for i in range(7)]
+    axs = [
+        fig.add_subplot(4, 2, 1),  # Realimentación
+        fig.add_subplot(4, 2, 2),  # Entrada
+        fig.add_subplot(4, 2, 3),  # Control PI
+        fig.add_subplot(4, 2, 4),  # Error
+        fig.add_subplot(4, 2, 5),  # Controlador P
+        fig.add_subplot(4, 2, 6),  # Perturbaciones
+        fig.add_subplot(4, 2, 7),  # Controlador I
+        fig.add_subplot(4, 2, 8)   # Espacio vacío (opcional)
+    ]
+
     canvas = tkagg.FigureCanvasTkAgg(fig, plot_window)
     canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
@@ -220,49 +237,62 @@ def create_plot_window():
             plot_window.after(100, update_plots)
             return
 
-        for ax in axs:
-            ax.clear()
+        try:
+            min_len = min(len(history[k]) for k in history)
+            if min_len < 2:
+                plot_window.after(100, update_plots)
+                return
 
-        # 1. Entrada
-        axs[0].plot(history["time"], history["input_speed"], 'b-', label='Entrada')
-        axs[0].set_title("Entrada deseada")
-        axs[0].legend(); axs[0].grid(True)
+            trimmed = {k: history[k][:min_len] for k in history}
 
-        # 2. Realimentación
-        axs[1].plot(history["time"], history["feedback"], 'g-', label='Realimentación')
-        axs[1].set_title("Velocidad Realimentada")
-        axs[1].legend(); axs[1].grid(True)
+            for ax in axs:
+                ax.clear()
 
-        # 3. Error
-        axs[2].plot(history["time"], history["error"], 'r-', label='Error')
-        axs[2].plot(history["time"], history["error_band_pos"], 'gray', linestyle='--', label='Banda ±2')
-        axs[2].plot(history["time"], history["error_band_neg"], 'gray', linestyle='--')
-        axs[2].set_title("Error")
-        axs[2].legend(); axs[2].grid(True)
+            axs[0].plot(trimmed["time"], trimmed["feedback"], 'g-', label='Realimentación')
+            axs[0].set_title("Realimentación")
+            axs[0].legend()
+            axs[0].grid(True)
 
-        # 4. Control P + I
-        pi_sum = [p + i for p, i in zip(history["p"], history["i"])]
-        axs[3].plot(history["time"], pi_sum, 'black', label='P + I')
-        axs[3].set_title("Controlador Total (P + I)")
-        axs[3].legend(); axs[3].grid(True)
+            axs[1].plot(trimmed["time"], trimmed["input_speed"], 'b-', label='Entrada deseada')
+            axs[1].set_title("Entrada deseada")
+            axs[1].legend()
+            axs[1].grid(True)
 
-        # 5. Control P
-        axs[4].plot(history["time"], history["p"], 'purple', label='P')
-        axs[4].set_title("Controlador P")
-        axs[4].legend(); axs[4].grid(True)
+            pi_sum = [p + i for p, i in zip(trimmed["p"], trimmed["i"])]
+            axs[2].plot(trimmed["time"], pi_sum, 'black', label='Controlador PI')
+            axs[2].set_title("Controlador PI")
+            axs[2].legend()
+            axs[2].grid(True)
 
-        # 6. Control I
-        axs[5].plot(history["time"], history["i"], 'brown', label='I')
-        axs[5].set_title("Controlador I")
-        axs[5].legend(); axs[5].grid(True)
+            axs[3].plot(trimmed["time"], trimmed["error"], 'r-', label='Error')
+            axs[3].plot(trimmed["time"], trimmed["error_band_pos"], 'gray', linestyle='--', label='Banda ±2')
+            axs[3].plot(trimmed["time"], trimmed["error_band_neg"], 'gray', linestyle='--')
+            axs[3].set_title("Error")
+            axs[3].legend()
+            axs[3].grid(True)
 
-        # 7. Perturbaciones
-        axs[6].step(history["time"], history["perturbations"], where='post', color='orange', label='Perturbación (km/h)')
-        axs[6].set_title("Perturbaciones Aplicadas")
-        axs[6].legend(); axs[6].grid(True)
+            axs[4].plot(trimmed["time"], trimmed["p"], 'purple', label='Controlador P')
+            axs[4].set_title("Controlador P")
+            axs[4].legend()
+            axs[4].grid(True)
 
-        fig.tight_layout()
-        canvas.draw()
+            axs[5].step(trimmed["time"], trimmed["perturbations"], where='post', color='orange', label='Perturbaciones')
+            axs[5].set_title("Perturbaciones Aplicadas")
+            axs[5].legend()
+            axs[5].grid(True)
+
+            axs[6].plot(trimmed["time"], trimmed["i"], 'brown', label='Controlador I')
+            axs[6].set_title("Controlador I")
+            axs[6].legend()
+            axs[6].grid(True)
+
+            axs[7].axis('off')  # Espacio libre
+
+            fig.tight_layout()
+            canvas.draw()
+        except Exception as e:
+            print(f"Error al actualizar gráficos: {e}")
+
         plot_window.after(100, update_plots)
 
     update_plots()
@@ -293,7 +323,7 @@ def clear_data():
         history[k].clear()
 
 def handle_events():
-    global running, cruise_active
+    global running, cruise_active, paused
     global dragging_manual, dragging_cruise, initial_speed, desired_speed
     global use_p, use_i
 
@@ -316,6 +346,8 @@ def handle_events():
                     start_plot_window()
                 else:
                     close_plot_window()
+            elif pause_button_rect.collidepoint(e.pos):
+                paused = not paused
             elif cruise_active:
                 for kmh, rect in perturb_buttons_rects.items():
                     if rect.collidepoint(e.pos):
