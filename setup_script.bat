@@ -1,37 +1,44 @@
 @echo off
 setlocal
 
-REM Paso 1: Verificar si python 3.12 está instalado
-where python >nul 2>nul
+REM Paso 1: Verificar si py -3.12 está disponible
+py -3.12 -c "exit()" >nul 2>nul
 if errorlevel 1 (
-echo Python no está instalado. Por favor instalá Python 3.12 manualmente desde https://www.python.org/downloads/release/python-3120/
-pause
-exit /b
+    echo Python 3.12 no está disponible en el sistema.
+    echo Por favor instalalo desde: https://www.python.org/downloads/release/python-3120/
+    pause
+    exit /b
 )
 
-for /f "tokens=2 delims=[]" %%a in ('python -V 2^>^&1') do set "PY_VERSION=%%a"
-echo Detectado Python %PY_VERSION%
+echo Python 3.12 encontrado correctamente.
 
-echo.
-echo Paso 2: Crear entorno virtual...
-python -m venv .venv
-if errorlevel 1 (
-echo Error al crear el entorno virtual.
-pause
-exit /b
+REM Paso 2: Crear entorno virtual si no existe
+if not exist ".venv" (
+    echo Creando entorno virtual con py -3.12...
+    py -3.12 -m venv .venv
+    if errorlevel 1 (
+        echo Error al crear el entorno virtual.
+        pause
+        exit /b
+    )
+) else (
+    echo Entorno virtual ya existe. Saltando creación.
 )
 
-echo.
-echo Paso 3: Activar entorno virtual...
+REM Paso 3: Activar entorno virtual
 call .venv\Scripts\activate
 
-echo.
-echo Paso 4: Instalar dependencias...
-pip install --upgrade pip
-pip install -r requirements.txt
+REM Paso 4: Instalar dependencias siempre que exista requirements.txt
+if exist requirements.txt (
+    echo Instalando dependencias desde requirements.txt...
+    python -m pip install --upgrade pip
+    pip install -r requirements.txt
+) else (
+    echo No se encontro requirements.txt, saltando instalacion de dependencias.
+)
 
-echo.
-echo Paso 5: Ejecutar main.py...
+REM Paso 5: Ejecutar el script principal
+echo Ejecutando main.py...
 python main.py
 
 endlocal
