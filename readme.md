@@ -11,7 +11,7 @@ Esta es una simulacion del sistema de control utilizado en los controles de velo
 
 ### Ejecucion mediante .exe
 
-Se ofrece la ejecucion mediante un ejecutable disponibilizado en el apartado de **releases**. Simplemente debe descargar el .exe y ejecutarlo.
+Se ofrece la ejecucion mediante un ejecutable disponibilizado en el apartado de **releases**. Debe darle click en el release y simplemente descargar el .exe disponibilizado
 
 ### Ejecucion mediante .bat
 
