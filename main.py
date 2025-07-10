@@ -133,8 +133,8 @@ def run_simulation():
         history["speed"].append(actual_speed)
         history["input_speed"].append(desired_speed if cruise_active else initial_speed)
         history["feedback"].append(actual_speed)
-        history["error_band_pos"].append(2.0)
-        history["error_band_neg"].append(-2.0)
+        history["error_band_pos"].append(desired_speed + 2.0)
+        history["error_band_neg"].append(desired_speed - 2.0)
         history["perturbations"].append(perturb_amount)
 
         time.sleep(dt)
@@ -245,6 +245,8 @@ def create_plot_window():
                 ax.clear()
 
             axs[0].plot(trimmed["time"], trimmed["feedback"], 'g-', label='Realimentación')
+            axs[0].plot(trimmed["time"], trimmed["error_band_pos"], 'gray', linestyle='--', label='Banda ±2')
+            axs[0].plot(trimmed["time"], trimmed["error_band_neg"], 'gray', linestyle='--')
             axs[0].set_title("Realimentación")
             axs[0].legend()
             axs[0].grid(True)
@@ -261,8 +263,6 @@ def create_plot_window():
             axs[2].grid(True)
 
             axs[3].plot(trimmed["time"], trimmed["error"], 'r-', label='Error')
-            axs[3].plot(trimmed["time"], trimmed["error_band_pos"], 'gray', linestyle='--', label='Banda ±2')
-            axs[3].plot(trimmed["time"], trimmed["error_band_neg"], 'gray', linestyle='--')
             axs[3].set_title("Error")
             axs[3].legend()
             axs[3].grid(True)
